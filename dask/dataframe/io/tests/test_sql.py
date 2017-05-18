@@ -24,7 +24,22 @@ Francis,5,30,0
 Garreth,6,20,0
 """
 
+data2 = """
+id,job,user_id
+0, Attacker, 0
+1, Clerk, 1
+2, Carter, 2
+3, Explorator, 3
+4, Piaf, 4
+5, Bacon, 5
+6, Blank, 6
+"""
+
 df = pd.read_csv(io.StringIO(data), index_col='number')
+df2 = pd.read_csv(io.StringIO(data2), index_col='id')
+df_join = df2.merge(df.reset_index(), right_on='number', left_on='user_id')
+df_join = df_join[['name', 'number', 'job', 'age', 'negish']]
+df_join.set_index('number', inplace=True)
 
 
 @pytest.yield_fixture
@@ -32,7 +47,63 @@ def db():
     with tmpfile() as f:
         uri = 'sqlite:///%s' % f
         df.to_sql('test', uri, index=True, if_exists='replace')
+        df2.to_sql('test2', uri, index=True, if_exists='replace')
         yield uri
+
+
+def test_sa_selectable_1(db):
+    from sqlalchemy.ext.declarative import declarative_base
+    from sqlalchemy.orm.query import Query
+    from sqlalchemy import Column, Integer, String
+    
+    Base = declarative_base()
+
+    class Table(Base):
+        __tablename__ = 'test'
+    
+        name = Column(String)
+        number = Column(Integer, primary_key=True)
+        age = Column(Integer)
+        negish = Column(Integer)
+
+    q = Query([Table.name, Table.number, Table.age, Table.negish])
+    data = read_sql_table(q.statement, db, columns=None, npartitions=2,
+                          index_col='number').compute()
+    
+    assert (data.name == df.name).all()
+    assert data.index.name == 'number'
+    assert_eq(data, df)
+
+
+def test_sa_selectable_2(db):
+    from sqlalchemy.ext.declarative import declarative_base
+    from sqlalchemy.orm.query import Query
+    from sqlalchemy import Column, Integer, String, ForeignKey
+    
+    Base = declarative_base()
+    
+    class Table(Base):
+        __tablename__ = 'test'
+        
+        name = Column(String)
+        number = Column(Integer, primary_key=True)
+        age = Column(Integer)
+        negish = Column(Integer)
+        
+    class Table2(Base):
+        __tablename__ = 'test2'
+        
+        id = Column(Integer, primary_key=True)
+        job = Column(String)
+        user_id = Column(Integer, ForeignKey('test.number'))
+    
+    q = Query([Table.name, Table.number, Table2.job, Table.age, Table.negish]).join(Table2)
+    data = read_sql_table(q.statement, db, columns=None, npartitions=2,
+                          index_col='number').compute()
+    
+    assert (data.name == df_join.name).all()
+    assert data.index.name == 'number'
+    assert_eq(data, df_join)
 
 
 def test_simple(db):
