@@ -92,14 +92,14 @@ def read_sql_table(table, uri, index_col, divisions=None, npartitions=None,
         # function names get pandas auto-named
         kwargs['index_col'] = index_col.name
 
-    q = sql.select(columns).limit(5).select_from(table)
+    q = sql.select(columns).limit(5).replace_selectable(table, table.alias())
     head = pd.read_sql(q, engine, **kwargs)
 
     if divisions is None:
         if limits is None:
             # calculate max and min for given index
             q = sql.select([sql.func.max(index), sql.func.min(index)]
-                           ).select_from(table)
+                           ).replace_selectable(table, table.alias())
             minmax = pd.read_sql(q, engine)
             maxi, mini = minmax.iloc[0]
             dtype = minmax.dtypes['max_1']
@@ -107,7 +107,7 @@ def read_sql_table(table, uri, index_col, divisions=None, npartitions=None,
             mini, maxi = limits
             dtype = pd.Series(limits).dtype
         if npartitions is None:
-            q = sql.select([sql.func.count(index)]).select_from(table)
+            q = sql.select([sql.func.count(index)]).replace_selectable(table, table.alias())
             count = pd.read_sql(q, engine)['count_1'][0]
             bytes_per_row = (head.memory_usage(deep=True, index=True)).sum() / 5
             npartitions = round(count * bytes_per_row / bytes_per_chunk) or 1
@@ -125,7 +125,7 @@ def read_sql_table(table, uri, index_col, divisions=None, npartitions=None,
     for i, (lower, upper) in enumerate(zip(lowers, uppers)):
         cond = index <= upper if i == len(lowers) - 1 else index < upper
         q = sql.select(columns).where(sql.and_(index >= lower, cond)
-                                      ).select_from(table)
+                                      ).replace_selectable(table, table.alias())
         parts.append(delayed(pd.read_sql)(q, uri, **kwargs))
 
     return from_delayed(parts, head, divisions=divisions)
