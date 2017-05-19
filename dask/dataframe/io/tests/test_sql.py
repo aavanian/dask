@@ -12,6 +12,28 @@ dd = pytest.importorskip('dask.dataframe')
 pytest.importorskip('sqlalchemy')
 pytest.importorskip('sqlite3')
 
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Column, Integer, String, ForeignKey
+
+Base = declarative_base()
+
+
+class Table(Base):
+    __tablename__ = 'test'
+    
+    name = Column(String(32))
+    number = Column(Integer, primary_key=True)
+    age = Column(Integer)
+    negish = Column(Integer)
+
+
+class Table2(Base):
+    __tablename__ = 'test2'
+    
+    id = Column(Integer, primary_key=True)
+    job = Column(String(32))
+    user_id = Column(Integer, ForeignKey('test.number'))
+
 
 data = """
 name,number,age,negish
@@ -37,34 +59,46 @@ id,job,user_id
 
 df = pd.read_csv(io.StringIO(data), index_col='number')
 df2 = pd.read_csv(io.StringIO(data2), index_col='id')
+
 df_join = df2.merge(df.reset_index(), right_on='number', left_on='user_id')
 df_join = df_join[['name', 'number', 'job', 'age', 'negish']]
 df_join.set_index('number', inplace=True)
 
 
+def pytest_generate_tests(metafunc):
+    if 'db' in metafunc.fixturenames:
+        metafunc.parametrize("db", ['sqlite', 'mysql'], indirect=True)
+
 @pytest.yield_fixture
-def db():
-    with tmpfile() as f:
-        uri = 'sqlite:///%s' % f
-        df.to_sql('test', uri, index=True, if_exists='replace')
-        df2.to_sql('test2', uri, index=True, if_exists='replace')
+def db(request):
+    if request.param == 'sqlite':
+        with tmpfile() as f:
+            uri = 'sqlite:///%s' % f
+            df.to_sql('test', uri, index=True, if_exists='replace')
+            df2.to_sql('test2', uri, index=True, if_exists='replace')
+            yield uri
+            
+    elif request.param == 'mysql':
+        from sqlalchemy import create_engine
+        uri = 'mysql+pymysql://x:x@x:3306/test'
+        engine = create_engine(uri)
+
+        from sqlalchemy_utils import database_exists, create_database, drop_database
+        if database_exists(engine.url):
+            drop_database(engine.url)
+        create_database(engine.url)
+
+        Base.metadata.create_all(engine)
+
+        df.to_sql('test', uri, index=True, if_exists='append')
+        df2.to_sql('test2', uri, index=True, if_exists='append')
         yield uri
+        
+        drop_database(engine.url)
 
 
 def test_sa_selectable_1(db):
-    from sqlalchemy.ext.declarative import declarative_base
     from sqlalchemy.orm.query import Query
-    from sqlalchemy import Column, Integer, String
-    
-    Base = declarative_base()
-
-    class Table(Base):
-        __tablename__ = 'test'
-    
-        name = Column(String)
-        number = Column(Integer, primary_key=True)
-        age = Column(Integer)
-        negish = Column(Integer)
 
     q = Query([Table.name, Table.number, Table.age, Table.negish])
     data = read_sql_table(q.statement, db, columns=None, npartitions=2,
@@ -76,28 +110,10 @@ def test_sa_selectable_1(db):
 
 
 def test_sa_selectable_2(db):
-    from sqlalchemy.ext.declarative import declarative_base
     from sqlalchemy.orm.query import Query
-    from sqlalchemy import Column, Integer, String, ForeignKey
-    
-    Base = declarative_base()
-    
-    class Table(Base):
-        __tablename__ = 'test'
-        
-        name = Column(String)
-        number = Column(Integer, primary_key=True)
-        age = Column(Integer)
-        negish = Column(Integer)
-        
-    class Table2(Base):
-        __tablename__ = 'test2'
-        
-        id = Column(Integer, primary_key=True)
-        job = Column(String)
-        user_id = Column(Integer, ForeignKey('test.number'))
-    
-    q = Query([Table.name, Table.number, Table2.job, Table.age, Table.negish]).join(Table2)
+
+    q = Query([Table.name, Table.number, Table2.job, Table.age, Table.negish])\
+        .join(Table2)
     data = read_sql_table(q.statement, db, columns=None, npartitions=2,
                           index_col='number').compute()
     
